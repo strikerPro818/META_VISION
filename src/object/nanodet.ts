@@ -1,26 +1,30 @@
 /**
- * NanoDet object detection module
+ * NanoDet object detection model implementation
+ *
+ * Based on: [**MB3-CenterNet**](https://github.com/610265158/mobilenetv3_centernet)
  */
 
-import { log, join } from '../helpers';
+import { log, join, now } from '../util/util';
 import * as tf from '../../dist/tfjs.esm.js';
+import { constants } from '../tfjs/constants';
 import { labels } from './labels';
-import { Item } from '../result';
-import { GraphModel, Tensor } from '../tfjs/types';
-import { Config } from '../config';
+import type { ObjectResult, Box } from '../result';
+import type { GraphModel, Tensor } from '../tfjs/types';
+import type { Config } from '../config';
+import { env } from '../util/env';
 
 let model;
-let last: Array<Item> = [];
+let last: Array<ObjectResult> = [];
+let lastTime = 0;
 let skipped = Number.MAX_SAFE_INTEGER;
 
 const scaleBox = 2.5; // increase box size
 
 export async function load(config: Config): Promise<GraphModel> {
-  if (!model) {
-    model = await tf.loadGraphModel(join(config.modelBasePath, config.object.modelPath));
+  if (!model || env.initial) {
+    model = await tf.loadGraphModel(join(config.modelBasePath, config.object.modelPath || ''));
     const inputs = Object.values(model.modelSignature['inputs']);
     model.inputSize = Array.isArray(inputs) ? parseInt(inputs[0].tensorShape.dim[2].size) : null;
-    if (!model.inputSize) throw new Error(`Human: Cannot determine model inputSize: ${config.object.modelPath}`);
     if (!model || !model.modelUrl) log('load model failed:', config.object.modelPath);
     else if (config.debug) log('load model:', model.modelUrl);
   } else if (config.debug) log('cached model:', model.modelUrl);
@@ -29,17 +33,17 @@ export async function load(config: Config): Promise<GraphModel> {
 
 async function process(res, inputSize, outputShape, config) {
   let id = 0;
-  let results: Array<Item> = [];
+  let results: Array<ObjectResult> = [];
   for (const strideSize of [1, 2, 4]) { // try each stride size as it detects large/medium/small objects
     // find scores, boxes, classes
-    tf.tidy(() => { // wrap in tidy to automatically deallocate temp tensors
+    tf.tidy(async () => { // wrap in tidy to automatically deallocate temp tensors
       const baseSize = strideSize * 13; // 13x13=169, 26x26=676, 52x52=2704
       // find boxes and scores output depending on stride
       const scoresT = res.find((a) => (a.shape[1] === (baseSize ** 2) && a.shape[2] === labels.length))?.squeeze();
       const featuresT = res.find((a) => (a.shape[1] === (baseSize ** 2) && a.shape[2] < labels.length))?.squeeze();
       const boxesMax = featuresT.reshape([-1, 4, featuresT.shape[1] / 4]); // reshape [output] to [4, output / 4] where number is number of different features inside each stride
-      const boxIdx = boxesMax.argMax(2).arraySync(); // what we need is indexes of features with highest scores, not values itself
-      const scores = scoresT.arraySync(); // optionally use exponential scores or just as-is
+      const boxIdx = await boxesMax.argMax(2).array(); // what we need is indexes of features with highest scores, not values itself
+      const scores = await scoresT.array(); // optionally use exponential scores or just as-is
       for (let i = 0; i < scoresT.shape[0]; i++) { // total strides (x * y matrix)
         for (let j = 0; j < scoresT.shape[1]; j++) { // one score for each class
           const score = scores[i][j]; // get score for current position
@@ -55,8 +59,8 @@ async function process(res, inputSize, outputShape, config) {
               cx + (scaleBox / strideSize * boxOffset[2]) - x,
               cy + (scaleBox / strideSize * boxOffset[3]) - y,
             ];
-            let boxRaw = [x, y, w, h]; // results normalized to range 0..1
-            boxRaw = boxRaw.map((a) => Math.max(0, Math.min(a, 1))); // fix out-of-bounds coords
+            let boxRaw: Box = [x, y, w, h]; // results normalized to range 0..1
+            boxRaw = boxRaw.map((a) => Math.max(0, Math.min(a, 1))) as Box; // fix out-of-bounds coords
             const box = [ // results normalized to input image pixels
               boxRaw[0] * outputShape[0],
               boxRaw[1] * outputShape[1],
@@ -71,8 +75,8 @@ async function process(res, inputSize, outputShape, config) {
               label: labels[j].label,
               // center: [Math.trunc(outputShape[0] * cx), Math.trunc(outputShape[1] * cy)],
               // centerRaw: [cx, cy],
-              box: (box.map((a) => Math.trunc(a))) as [number, number, number, number],
-              boxRaw: boxRaw as [number, number, number, number],
+              box: box.map((a) => Math.trunc(a)) as Box,
+              boxRaw,
             };
             results.push(result);
           }
@@ -90,7 +94,7 @@ async function process(res, inputSize, outputShape, config) {
   let nmsIdx: Array<number> = [];
   if (nmsBoxes && nmsBoxes.length > 0) {
     const nms = await tf.image.nonMaxSuppressionAsync(nmsBoxes, nmsScores, config.object.maxDetected, config.object.iouThreshold, config.object.minConfidence);
-    nmsIdx = nms.dataSync();
+    nmsIdx = await nms.data();
     tf.dispose(nms);
   }
 
@@ -102,23 +106,27 @@ async function process(res, inputSize, outputShape, config) {
   return results;
 }
 
-export async function predict(image: Tensor, config: Config): Promise<Item[]> {
-  if ((skipped < config.object.skipFrames) && config.skipFrame && (last.length > 0)) {
+export async function predict(image: Tensor, config: Config): Promise<ObjectResult[]> {
+  const skipTime = (config.object.skipTime || 0) > (now() - lastTime);
+  const skipFrame = skipped < (config.object.skipFrames || 0);
+  if (config.skipAllowed && skipTime && skipFrame && (last.length > 0)) {
     skipped++;
     return last;
   }
   skipped = 0;
+  if (!env.kernels.includes('mod') || !env.kernels.includes('sparsetodense')) return last;
   return new Promise(async (resolve) => {
     const outputSize = [image.shape[2], image.shape[1]];
     const resize = tf.image.resizeBilinear(image, [model.inputSize, model.inputSize], false);
-    const norm = resize.div(255);
+    const norm = tf.div(resize, constants.tf255);
     const transpose = norm.transpose([0, 3, 1, 2]);
-    norm.dispose();
-    resize.dispose();
+    tf.dispose(norm);
+    tf.dispose(resize);
 
     let objectT;
-    if (config.object.enabled) objectT = await model.predict(transpose);
-    transpose.dispose();
+    if (config.object.enabled) objectT = model.execute(transpose);
+    lastTime = now();
+    tf.dispose(transpose);
 
     const obj = await process(objectT, model.inputSize, outputSize, config);
     last = obj;

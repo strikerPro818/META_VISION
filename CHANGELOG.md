@@ -1,16 +1,236 @@
-# @vladmandic/human  
+#   
 
-Version: **2.0.3**  
-Description: **Human: AI-powered 3D Face Detection & Rotation Tracking, Face Description & Recognition, Body Pose Tracking, 3D Hand & Finger Tracking, Iris Analysis, Age & Gender & Emotion Prediction, Gesture Recognition**  
-
-Author: **Vladimir Mandic <mandic00@live.com>**  
-License: **MIT** </LICENSE>  
-Repository: **<git+https://github.com/vladmandic/human.git>**  
-
+  Version: **undefined**  
+  Description: **undefined**  
+  
+  Author: **undefined**  
+  License: **undefined**  
+  Repository: **<https://github.com/vladmandic/human>**  
+  
 ## Changelog
+  
+### **2.5.3** 2021/11/18 mandic00@live.com
 
-### **HEAD -> main** 2021/06/18 mandic00@live.com
 
+### **origin/main** 2021/11/17 mandic00@live.com
+
+- create typedef rollup
+- optimize centernet
+- cache frequent tf constants
+- add extra face rotation prior to mesh
+- release 2.5.2
+- improve error handling
+
+### **2.5.2** 2021/11/14 mandic00@live.com
+
+- fix mobilefacenet module
+- fix gear and ssrnet modules
+- fix for face crop when mesh is disabled
+- implement optional face masking
+- add similarity score range normalization
+- add faceid demo
+- documentation overhaul
+- auto tensor shape and channels handling
+- disable use of path2d in node
+- add liveness module and facerecognition demo
+- initial version of facerecognition demo
+- rebuild
+- add type defs when working with relative path imports
+- disable humangl backend if webgl 1.0 is detected
+
+### **release: 2.5.1** 2021/11/08 mandic00@live.com
+
+
+### **2.5.1** 2021/11/08 mandic00@live.com
+
+- new human.compare api
+- added links to release notes
+- new frame change detection algorithm
+- add histogram equalization
+- implement wasm missing ops
+- performance and memory optimizations
+- fix react compatibility issues
+- improve box rescaling for all modules
+- improve precision using wasm backend
+- refactor predict with execute
+- patch tfjs type defs
+- start 2.5 major version
+- build and docs cleanup
+- fix firefox bug
+
+### **2.4.3** 2021/10/28 mandic00@live.com
+
+- additional human.performance counters
+
+### **2.4.2** 2021/10/27 mandic00@live.com
+
+- add ts demo
+- switch from es2018 to es2020 for main build
+- switch to custom tfjs for demos
+
+### **release: 2.4.1** 2021/10/25 mandic00@live.com
+
+
+### **2.4.1** 2021/10/25 mandic00@live.com
+
+- refactoring plus jsdoc comments
+- increase face similarity match resolution
+- time based caching
+- turn on minification
+- initial work on skiptime
+- added generic types
+- enhanced typing exports
+- add optional autodetected custom wasm path
+
+### **2.3.6** 2021/10/21 mandic00@live.com
+
+- fix for human.draw labels and typedefs
+- refactor human.env to a class type
+- add human.custom.esm using custom tfjs build
+
+### **2.3.5** 2021/10/19 mandic00@live.com
+
+- removed direct usage of performance.now
+
+### **2.3.4** 2021/10/19 mandic00@live.com
+
+- minor blazepose optimizations
+- compress samples
+- remove handdetect from default package
+- remove posenet from default package
+- enhanced movenet postprocessing
+- use transferrable buffer for worker messages
+- add optional anti-spoofing module
+- add node-match advanced example using worker thread pool
+- package updates
+- optimize image preprocessing
+
+### **release: 2.3.2** 2021/10/11 mandic00@live.com
+
+- major precision improvements to movenet and handtrack
+- image processing fixes
+- redesign body and hand caching and interpolation
+- demo default config cleanup
+- improve gaze and face angle visualizations in draw
+
+### **release 2.3.1** 2021/10/06 mandic00@live.com
+
+
+### **2.3.1** 2021/10/06 mandic00@live.com
+
+- workaround for chrome offscreencanvas bug
+- fix backend conflict in webworker
+- add blazepose v2 and add annotations to body results
+- fix backend order initialization
+- added docker notes
+- breaking change: new similarity and match methods
+- release candidate
+- tweaked default values
+- enable handtrack as default model
+- redesign face processing
+- refactoring
+- define app specific types
+- implement box caching for movenet
+- autodetect number of bodies and hands
+- upload new samples
+- new samples gallery and major code folder restructure
+- new release
+
+### **2.2.3** 2021/09/24 mandic00@live.com
+
+- optimize model loading
+- support segmentation for nodejs
+- redo segmentation and handtracking
+- prototype handtracking
+- automated browser tests
+- support for dynamic backend switching
+- initial automated browser tests
+- enhanced automated test coverage
+- more automated tests
+- added configuration validation
+- prevent validation failed on some model combinations
+- webgl exception handling
+
+### **2.2.2** 2021/09/17 mandic00@live.com
+
+- experimental webgl status monitoring
+
+### **release: 2.2.1** 2021/09/16 mandic00@live.com
+
+
+### **2.2.1** 2021/09/16 mandic00@live.com
+
+- add vr model demo
+- all tests passing
+- redefine draw helpers interface
+- add simple webcam and webrtc demo
+- added visual results browser to demo
+- reorganize tfjs bundle
+- experimental custom tfjs bundle - disabled
+- add platform and backend capabilities detection
+- enhanced automated tests
+- enable canvas patching for nodejs
+- full ts strict typechecks
+- fix multiple memory leaks
+- modularize human class and add model validation
+- add dynamic kernel op detection
+- added human.env diagnostic class
+- minor typos
+- release candidate
+- parametrize face config
+- mark all config items as optional
+- redefine config and result interfaces
+- fix usge of string enums
+- start using partial definitions
+- implement event emitters
+- fix iife loader
+- simplify dependencies
+- fix file permissions
+- remove old build server
+- change build process
+- add benchmark info
+- simplify canvas handling in nodejs
+- full rebuild
+
+### **2.1.5** 2021/08/31 mandic00@live.com
+
+- added demo node-canvas
+- dynamically generate default wasm path
+- implement finger poses in hand detection and gestures
+- implemented movenet-multipose model
+
+### **2.1.4** 2021/08/19 mandic00@live.com
+
+- add static type definitions to main class
+- fix interpolation overflow
+- rebuild full
+- improve face box caching
+- strict type checks
+- add webgu checks
+- experimental webgpu support
+- add experimental webgu demo
+- add backend initialization checks
+- complete async work
+- list detect cameras
+- switch to async data reads
+
+### **2.1.3** 2021/08/12 mandic00@live.com
+
+- fix centernet & update blazeface
+- minor update
+- replace movenet with lightning-v4
+- enable webgl uniform support for faster warmup
+
+### **2.1.2** 2021/07/29 mandic00@live.com
+
+- fix unregistered ops in tfjs
+- fix typo
+- rebuild new release
+
+### **2.1.1** 2021/07/29 mandic00@live.com
+
+- proposal #141
+- add note on manually disping tensor
 - modularize model loading
 
 ### **2.0.3** 2021/06/18 mandic00@live.com

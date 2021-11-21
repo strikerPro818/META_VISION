@@ -6,7 +6,8 @@ const log = require('@vladmandic/pilogger');
 const fs = require('fs');
 const path = require('path');
 const process = require('process');
-const fetch = require('node-fetch').default;
+
+let fetch; // fetch is dynamically imported later
 
 // for NodeJS, `tfjs-node` or `tfjs-node-gpu` should be loaded before using Human
 // eslint-disable-next-line no-unused-vars, @typescript-eslint/no-unused-vars
@@ -18,7 +19,7 @@ const Human = require('../../dist/human.node.js').default; // or const Human = r
 let human = null;
 
 const myConfig = {
-  backend: 'tensorflow',
+  // backend: 'tensorflow',
   modelBasePath: 'file://models/',
   debug: true,
   async: false,
@@ -49,11 +50,12 @@ async function init() {
   await human.tf.ready();
   // pre-load models
   log.info('Human:', human.version);
-  log.info('Active Configuration', human.config);
+  // log.info('Active Configuration', human.config);
   await human.load();
   const loaded = Object.keys(human.models).filter((a) => human.models[a]);
   log.info('Loaded:', loaded);
-  log.info('Memory state:', human.tf.engine().memory());
+  // log.info('Memory state:', human.tf.engine().memory());
+  log.data(tf.backend()['binding'] ? tf.backend()['binding']['TF_Version'] : null);
 }
 
 async function detect(input) {
@@ -121,7 +123,7 @@ async function detect(input) {
   if (result && result.hand && result.hand.length > 0) {
     for (let i = 0; i < result.hand.length; i++) {
       const hand = result.hand[i];
-      log.data(`  Hand: #${i} score:${hand.score}`);
+      log.data(`  Hand: #${i} score:${hand.score} keypoints:${hand.keypoints?.length}`);
     }
   } else {
     log.data('  Hand: N/A');
@@ -134,6 +136,7 @@ async function detect(input) {
   } else {
     log.data('  Gesture: N/A');
   }
+
   if (result && result.object && result.object.length > 0) {
     for (let i = 0; i < result.object.length; i++) {
       const object = result.object[i];
@@ -185,8 +188,10 @@ async function test() {
 }
 
 async function main() {
+  log.configure({ inspect: { breakLength: 265 } });
   log.header();
   log.info('Current folder:', process.env.PWD);
+  fetch = (await import('node-fetch')).default;
   await init();
   const f = process.argv[2];
   if (process.argv.length !== 3) {

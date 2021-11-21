@@ -1,5 +1,3 @@
-//@ts-nocheck
-
 let instance = 0;
 let CSScreated = false;
 
@@ -21,7 +19,7 @@ function createCSS() {
   if (CSScreated) return;
   const css = `
   :root { --rounded: 0.1rem; }
-  .menu { position: absolute; top: 0rem; right: 0; min-width: 180px; width: max-content; padding: 0.2rem 0.2rem 0 0.2rem; line-height: 1.8rem; z-index: 10; background: ${theme.background}; border: none }
+  .menu { position: absolute; top: 0rem; right: 0; min-width: 180px; width: max-content; padding: 0.2rem 0.8rem 0 0.8rem; line-height: 1.8rem; z-index: 10; background: ${theme.background}; border: none }
   .button { text-shadow: none; }
 
   .menu-container { display: block; max-height: 100vh; }
@@ -46,7 +44,7 @@ function createCSS() {
   .menu-button:hover { background: ${theme.buttonHover}; box-shadow: 4px 4px 4px 0 black; }
   .menu-button:focus { outline: none; }
 
-  .menu-checkbox { width: 2.6rem; height: 1rem; background: ${theme.itemBackground}; margin: 0.5rem 0.5rem 0 0; position: relative; border-radius: var(--rounded); }
+  .menu-checkbox { width: 2.6rem; height: 1rem; background: ${theme.itemBackground}; margin: 0.5rem 1.0rem 0 0; position: relative; border-radius: var(--rounded); }
   .menu-checkbox:after { content: 'OFF'; color: ${theme.checkboxOff}; position: absolute; right: 0.2rem; top: -0.4rem; font-weight: 800; font-size: 0.5rem; }
   .menu-checkbox:before { content: 'ON'; color: ${theme.checkboxOn}; position: absolute; left: 0.3rem; top: -0.4rem; font-weight: 800; font-size: 0.5rem; }
   .menu-checkbox-label { width: 1.3rem; height: 1rem; cursor: pointer; position: absolute; top: 0; left: 0rem; z-index: 1; background: ${theme.checkboxOff};
@@ -55,7 +53,7 @@ function createCSS() {
   input[type=checkbox] { visibility: hidden; }
   input[type=checkbox]:checked + label { left: 1.4rem; background: ${theme.checkboxOn}; }
 
-  .menu-range { margin: 0.2rem 0.5rem 0 0; width: 3.5rem; background: transparent; color: ${theme.rangeBackground}; }
+  .menu-range { margin: 0.2rem 1.0rem 0 0; width: 5rem; background: transparent; color: ${theme.rangeBackground}; }
   .menu-range:before { color: ${theme.rangeLabel}; margin: 0 0.4rem 0 0; font-weight: 800; font-size: 0.6rem; position: relative; top: 0.3rem; content: attr(value); }
 
   input[type=range] { -webkit-appearance: none; }
@@ -86,6 +84,7 @@ class Menu {
   }
 
   createMenu(parent, title = '', position = { top: null, left: null, bottom: null, right: null }) {
+    /** @type {HTMLDivElement} */
     this.menu = document.createElement('div');
     this.menu.id = `menu-${instance}`;
     this.menu.className = 'menu';
@@ -120,6 +119,7 @@ class Menu {
 
     this.menu.appendChild(this.container);
     if (typeof parent === 'object') parent.appendChild(this.menu);
+    // @ts-ignore undefined
     else document.getElementById(parent).appendChild(this.menu);
   }
 
@@ -133,11 +133,11 @@ class Menu {
   }
 
   get width() {
-    return this.menu.offsetWidth || 0;
+    return this.menu ? this.menu.offsetWidth : 0;
   }
 
   get height() {
-    return this.menu.offsetHeight || 0;
+    return this.menu ? this.menu.offsetHeight : 0;
   }
 
   hide() {
@@ -184,6 +184,7 @@ class Menu {
       this.hidden = !this.hidden;
       const all = document.getElementsByClassName('menu');
       for (const item of all) {
+        // @ts-ignore
         item.style.display = this.hidden ? 'none' : 'block';
       }
     });
@@ -205,8 +206,10 @@ class Menu {
     el.innerHTML = `<div class="menu-checkbox"><input class="menu-checkbox" type="checkbox" id="${this.newID}" ${object[variable] ? 'checked' : ''}/><label class="menu-checkbox-label" for="${this.ID}"></label></div>${title}`;
     if (this.container) this.container.appendChild(el);
     el.addEventListener('change', (evt) => {
-      object[variable] = evt.target.checked;
-      if (callback) callback(evt.target.checked);
+      if (evt.target) {
+        object[variable] = evt.target['checked'];
+        if (callback) callback(evt.target['checked']);
+      }
     });
     return el;
   }
@@ -225,7 +228,7 @@ class Menu {
     el.style.fontVariant = document.body.style.fontVariant;
     if (this.container) this.container.appendChild(el);
     el.addEventListener('change', (evt) => {
-      if (callback) callback(items[evt.target.selectedIndex]);
+      if (callback && evt.target) callback(items[evt.target['selectedIndex']]);
     });
     return el;
   }
@@ -237,12 +240,13 @@ class Menu {
     if (this.container) this.container.appendChild(el);
     el.addEventListener('change', (evt) => {
       if (evt.target) {
-        object[variable] = parseInt(evt.target.value) === parseFloat(evt.target.value) ? parseInt(evt.target.value) : parseFloat(evt.target.value);
-        evt.target.setAttribute('value', evt.target.value);
-        if (callback) callback(evt.target.value);
+        object[variable] = parseInt(evt.target['value']) === parseFloat(evt.target['value']) ? parseInt(evt.target['value']) : parseFloat(evt.target['value']);
+        // @ts-ignore
+        evt.target.setAttribute('value', evt.target['value']);
+        if (callback) callback(evt.target['value']);
       }
     });
-    el.input = el.children[0];
+    el['input'] = el.children[0];
     return el;
   }
 
@@ -302,9 +306,12 @@ class Menu {
   // eslint-disable-next-line class-methods-use-this
   async updateChart(id, values) {
     if (!values || (values.length === 0)) return;
+    /** @type {HTMLCanvasElement} */ 
+    // @ts-ignore undefined
     const canvas = document.getElementById(`menu-canvas-${id}`);
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     ctx.fillStyle = theme.background;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     const width = canvas.width / values.length;
@@ -318,7 +325,7 @@ class Menu {
       ctx.fillRect(i * width, 0, width - 4, canvas.height);
       ctx.fillStyle = theme.background;
       ctx.font = `${width / 1.5}px "Segoe UI"`;
-      ctx.fillText(Math.round(values[i]), i * width + 1, canvas.height - 1, width - 1);
+      ctx.fillText(Math.round(values[i]).toString(), i * width + 1, canvas.height - 1, width - 1);
     }
   }
 }
