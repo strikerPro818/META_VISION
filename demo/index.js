@@ -18,38 +18,42 @@
  * ui={}: contains all variables exposed in the UI
  */
 
+// test url <https://human.local/?worker=false&async=false&bench=false&draw=true&warmup=full&backend=humangl>
+
 // @ts-nocheck // typescript checks disabled as this is pure javascript
 
 import Human from '../dist/human.esm.js'; // equivalent of @vladmandic/human
 import Menu from './helpers/menu.js';
 import GLBench from './helpers/gl-bench.js';
 import webRTC from './helpers/webrtc.js';
+import jsonView from './helpers/jsonview.js';
 
 let human;
 
 let userConfig = {
+  // face: { enabled: false },
+  // body: { enabled: false },
+  // hand: { enabled: false },
+  /*
   warmup: 'none',
   backend: 'humangl',
-  wasmPath: 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@3.7.0/dist/',
-  /*
+  debug: true,
+  wasmPath: 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@3.9.0/dist/',
   async: false,
-  cacheSensitivity: 0,
-  filter: {
-    enabled: false,
-    flip: false,
-  },
+  cacheSensitivity: 0.75,
+  filter: { enabled: false, flip: false },
   face: { enabled: false,
-    detector: { return: true },
-    mesh: { enabled: true },
+    detector: { return: false, rotation: true },
+    mesh: { enabled: false },
     iris: { enabled: false },
     description: { enabled: false },
     emotion: { enabled: false },
   },
   object: { enabled: false },
   gesture: { enabled: true },
-  hand: { enabled: false },
+  hand: { enabled: true, maxDetected: 1, minConfidence: 0.5, detector: { modelPath: 'handtrack.json' } },
   body: { enabled: false },
-  // body: { enabled: true, modelPath: 'posenet.json' },
+  // body: { enabled: true, modelPath: 'movenet-multipose.json' },
   segmentation: { enabled: false },
   */
 };
@@ -59,8 +63,12 @@ const drawOptions = {
   drawBoxes: true,
   drawGaze: true,
   drawLabels: true,
+  drawGestures: true,
   drawPolygons: true,
   drawPoints: false,
+  fillPolygons: false,
+  useCurves: false,
+  useDepth: true,
 };
 
 // ui options
@@ -74,13 +82,15 @@ const ui = {
   useWorker: true, // use web workers for processing
   worker: 'index-worker.js',
   maxFPSframes: 10, // keep fps history for how many frames
-  modelsPreload: true, // preload human models on startup
+  modelsPreload: false, // preload human models on startup
   modelsWarmup: false, // warmup human models on startup
   buffered: true, // should output be buffered between frames
   interpolated: true, // should output be interpolated for smoothness between frames
   iconSize: '48px', // ui icon sizes
+  autoPlay: false, // start webcam & detection on load
 
   // internal variables
+  exceptionHandler: true, // should capture all unhandled exceptions
   busy: false, // internal camera busy flag
   menuWidth: 0, // internal
   menuHeight: 0, // internal
@@ -94,9 +104,11 @@ const ui = {
   framesDraw: 0, // internal, statistics on frames drawn
   framesDetect: 0, // internal, statistics on frames detected
   bench: true, // show gl fps benchmark window
+  results: false, // show results tree
   lastFrame: 0, // time of last frame processing
   viewportSet: false, // internal, has custom viewport been set
   background: null, // holds instance of segmentation background image
+  transferCanvas: null, // canvas used to transfer data to and from worker
 
   // webrtc
   useWebRTC: false, // use webrtc as camera source instead of local webcam
@@ -134,6 +146,10 @@ let worker;
 let bench;
 let lastDetectedResult = {};
 
+// helper function: async pause
+// eslint-disable-next-line @typescript-eslint/no-unused-vars, no-unused-vars
+const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
 // helper function: translates json to human readable string
 function str(...msg) {
   if (!Array.isArray(msg)) return msg;
@@ -153,26 +169,43 @@ function log(...msg) {
   if (ui.console) console.log(ts, ...msg);
 }
 
+let prevStatus = '';
 function status(msg) {
   const div = document.getElementById('status');
-  if (div && msg && msg.length > 0) {
+  if (div && msg && msg !== prevStatus && msg.length > 0) {
     log('status', msg);
     document.getElementById('play').style.display = 'none';
     document.getElementById('loader').style.display = 'block';
     div.innerText = msg;
+    prevStatus = msg;
   } else {
     const video = document.getElementById('video');
-    document.getElementById('play').style.display = (video.srcObject !== null) && !video.paused ? 'none' : 'block';
+    const playing = (video.srcObject !== null) && !video.paused;
+    document.getElementById('play').style.display = playing ? 'none' : 'block';
     document.getElementById('loader').style.display = 'none';
     div.innerText = '';
   }
 }
 
+async function videoPlay() {
+  document.getElementById('btnStartText').innerHTML = 'pause video';
+  await document.getElementById('video').play();
+  // status();
+}
+
+async function videoPause() {
+  document.getElementById('btnStartText').innerHTML = 'start video';
+  await document.getElementById('video').pause();
+  status('paused');
+  document.getElementById('play').style.display = 'block';
+  document.getElementById('loader').style.display = 'none';
+}
+
 const compare = { enabled: false, original: null };
-async function calcSimmilariry(result) {
+async function calcSimmilarity(result) {
   document.getElementById('compare-container').style.display = compare.enabled ? 'block' : 'none';
   if (!compare.enabled) return;
-  if (!result || !result.face || !result.face[0].embedding) return;
+  if (!result || !result.face || !result.face[0] || !result.face[0].embedding) return;
   if (!(result.face.length > 0) || (result.face[0].embedding.length <= 64)) return;
   if (!compare.original) {
     compare.original = result;
@@ -181,12 +214,12 @@ async function calcSimmilariry(result) {
       const enhanced = human.enhance(result.face[0]);
       if (enhanced) {
         const c = document.getElementById('orig');
-        const squeeze = enhanced.squeeze();
-        const norm = squeeze.div(255);
+        const squeeze = human.tf.squeeze(enhanced);
+        const norm = human.tf.div(squeeze, 255);
         human.tf.browser.toPixels(norm, c);
-        enhanced.dispose();
-        squeeze.dispose();
-        norm.dispose();
+        human.tf.dispose(enhanced);
+        human.tf.dispose(squeeze);
+        human.tf.dispose(norm);
       }
     } else {
       document.getElementById('compare-canvas').getContext('2d').drawImage(compare.original.canvas, 0, 0, 200, 200);
@@ -196,24 +229,46 @@ async function calcSimmilariry(result) {
   document.getElementById('similarity').innerText = `similarity: ${Math.trunc(1000 * similarity) / 10}%`;
 }
 
+const isLive = (input) => {
+  const isCamera = input.srcObject?.getVideoTracks()[0] && input.srcObject?.getVideoTracks()[0].enabled;
+  const isVideoLive = input.readyState > 2;
+  const isCameraLive = input.srcObject?.getVideoTracks()[0].readyState === 'live';
+  let live = isCamera ? isCameraLive : isVideoLive;
+  live = live && !input.paused;
+  return live;
+};
+
 // draws processed results and starts processing of a next frame
-let lastDraw = performance.now();
+let lastDraw = 0;
 async function drawResults(input) {
+  // await delay(25);
   const result = lastDetectedResult;
   const canvas = document.getElementById('canvas');
 
   // update draw fps data
-  ui.drawFPS.push(1000 / (performance.now() - lastDraw));
+  ui.drawFPS.push(1000 / (human.now() - lastDraw));
   if (ui.drawFPS.length > ui.maxFPSframes) ui.drawFPS.shift();
-  lastDraw = performance.now();
+  lastDraw = human.now();
 
   // draw fps chart
   await menu.process.updateChart('FPS', ui.detectFPS);
 
+  document.getElementById('segmentation-container').style.display = userConfig.segmentation.enabled ? 'block' : 'none';
   if (userConfig.segmentation.enabled && ui.buffered) { // refresh segmentation if using buffered output
-    result.canvas = await human.segmentation(input, ui.background, userConfig);
+    const seg = await human.segmentation(input, ui.background);
+    if (seg.alpha) {
+      const canvasSegMask = document.getElementById('segmentation-mask');
+      const ctxSegMask = canvasSegMask.getContext('2d');
+      ctxSegMask.clearRect(0, 0, canvasSegMask.width, canvasSegMask.height); // need to clear as seg.alpha is alpha based canvas so it adds
+      ctxSegMask.drawImage(seg.alpha, 0, 0, seg.alpha.width, seg.alpha.height, 0, 0, canvasSegMask.width, canvasSegMask.height);
+      const canvasSegCanvas = document.getElementById('segmentation-canvas');
+      const ctxSegCanvas = canvasSegCanvas.getContext('2d');
+      ctxSegCanvas.clearRect(0, 0, canvasSegCanvas.width, canvasSegCanvas.height); // need to clear as seg.alpha is alpha based canvas so it adds
+      ctxSegCanvas.drawImage(seg.canvas, 0, 0, seg.alpha.width, seg.alpha.height, 0, 0, canvasSegCanvas.width, canvasSegCanvas.height);
+    }
+    // result.canvas = seg.alpha;
   } else if (!result.canvas || ui.buffered) { // refresh with input if using buffered output or if missing canvas
-    const image = await human.image(input);
+    const image = await human.image(input, false);
     result.canvas = image.canvas;
     human.tf.dispose(image.tensor);
   }
@@ -231,12 +286,18 @@ async function drawResults(input) {
   }
 
   // draw all results using interpolated results
-  if (ui.interpolated) {
-    const interpolated = human.next(result);
-    human.draw.all(canvas, interpolated, drawOptions);
-  } else {
-    human.draw.all(canvas, result, drawOptions);
+  let interpolated;
+  if (ui.interpolated) interpolated = human.next(result);
+  else interpolated = result;
+  human.draw.all(canvas, interpolated, drawOptions);
+
+  // show tree with results
+  if (ui.results) {
+    const div = document.getElementById('results');
+    div.innerHTML = '';
+    jsonView(result, div, 'Results', ['canvas', 'timestamp']);
   }
+
   /* alternatively use individual functions
   human.draw.face(canvas, result.face);
   human.draw.body(canvas, result.body);
@@ -246,32 +307,40 @@ async function drawResults(input) {
   */
   // eslint-disable-next-line no-unused-vars, @typescript-eslint/no-unused-vars
   const person = result.persons; // explicitly invoke person getter
-  await calcSimmilariry(result);
+  await calcSimmilarity(result);
 
   // update log
   const engine = human.tf.engine();
-  const gpu = engine.backendInstance ? `gpu: ${(engine.backendInstance.numBytesInGPU ? engine.backendInstance.numBytesInGPU : 0).toLocaleString()} bytes` : '';
-  const memory = `system: ${engine.state.numBytes.toLocaleString()} bytes ${gpu} | tensors: ${engine.state.numTensors.toLocaleString()}`;
   const processing = result.canvas ? `processing: ${result.canvas.width} x ${result.canvas.height}` : '';
   const avgDetect = ui.detectFPS.length > 0 ? Math.trunc(10 * ui.detectFPS.reduce((a, b) => a + b, 0) / ui.detectFPS.length) / 10 : 0;
   const avgDraw = ui.drawFPS.length > 0 ? Math.trunc(10 * ui.drawFPS.reduce((a, b) => a + b, 0) / ui.drawFPS.length) / 10 : 0;
   const warning = (ui.detectFPS.length > 5) && (avgDetect < 2) ? '<font color="lightcoral">warning: your performance is low: try switching to higher performance backend, lowering resolution or disabling some models</font>' : '';
   const fps = avgDetect > 0 ? `FPS process:${avgDetect} refresh:${avgDraw}` : '';
+  const backend = result.backend || human.tf.getBackend();
+  const gpu = engine.backendInstance ? `gpu: ${(engine.backendInstance.numBytesInGPU ? engine.backendInstance.numBytesInGPU : 0).toLocaleString()} bytes` : '';
+  const memory = result.tensors ? `tensors: ${result.tensors.toLocaleString()} in worker` : `system: ${engine.state.numBytes.toLocaleString()} bytes ${gpu} | tensors: ${engine.state.numTensors.toLocaleString()}`;
   document.getElementById('log').innerHTML = `
     video: ${ui.camera.name} | facing: ${ui.camera.facing} | screen: ${window.innerWidth} x ${window.innerHeight} camera: ${ui.camera.width} x ${ui.camera.height} ${processing}<br>
-    backend: ${human.tf.getBackend()} | ${memory}<br>
-    performance: ${str(lastDetectedResult.performance)}ms ${fps}<br>
+    backend: ${backend} | ${memory}<br>
+    performance: ${str(interpolated.performance)}ms ${fps}<br>
     ${warning}<br>
   `;
   ui.framesDraw++;
-  ui.lastFrame = performance.now();
-  // if buffered, immediate loop but limit frame rate although it's going to run slower as JS is singlethreaded
+  ui.lastFrame = human.now();
   if (ui.buffered) {
-    ui.drawThread = requestAnimationFrame(() => drawResults(input));
+    if (isLive(input)) {
+      // ui.drawThread = requestAnimationFrame(() => drawResults(input));
+      ui.drawThread = setTimeout(() => drawResults(input), 25);
+    } else {
+      cancelAnimationFrame(ui.drawThread);
+      videoPause();
+      ui.drawThread = null;
+    }
   } else {
     if (ui.drawThread) {
       log('stopping buffered refresh');
       cancelAnimationFrame(ui.drawThread);
+      ui.drawThread = null;
     }
   }
 }
@@ -292,13 +361,13 @@ async function setupCamera() {
     } catch (err) {
       log(err);
     } finally {
-      status();
+      // status();
     }
     return '';
   }
   const live = video.srcObject ? ((video.srcObject.getVideoTracks()[0].readyState === 'live') && (video.readyState > 2) && (!video.paused)) : false;
   let msg = '';
-  status('META ROBOTICS');
+  status('setting up camera');
   // setup webcam. note that navigator.mediaDevices requires that page is accessed via https
   if (!navigator.mediaDevices) {
     msg = 'camera access not supported';
@@ -322,7 +391,7 @@ async function setupCamera() {
   };
   // enumerate devices for diag purposes
   if (initialCameraAccess) {
-    navigator.mediaDevices.enumerateDevices().then((devices) => log('enumerated devices:', devices));
+    navigator.mediaDevices.enumerateDevices().then((devices) => log('enumerated input devices:', devices));
     log('camera constraints', constraints);
   }
   try {
@@ -346,31 +415,25 @@ async function setupCamera() {
   }
   const track = stream.getVideoTracks()[0];
   const settings = track.getSettings();
-  if (initialCameraAccess) log('selected video source:', track, settings); // log('selected camera:', track.label, 'id:', settings.deviceId);
-  ui.camera = { name: track.label.toLowerCase(), width: video.videoWidth, height: video.videoHeight, facing: settings.facingMode === 'user' ? 'front' : 'back' };
+  if (initialCameraAccess) log('selected video source:', track, settings);
+  ui.camera = { name: track.label.toLowerCase(), width: settings.width, height: settings.height, facing: settings.facingMode === 'user' ? 'front' : 'back' };
   initialCameraAccess = false;
-  const promise = !stream || new Promise((resolve) => {
-    video.onloadeddata = () => {
-      if (settings.width > settings.height) canvas.style.width = '100vw';
-      else canvas.style.height = '100vh';
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ui.menuWidth.input.setAttribute('value', video.videoWidth);
-      ui.menuHeight.input.setAttribute('value', video.videoHeight);
-      if (live) video.play();
-      // eslint-disable-next-line no-use-before-define
-      if (live && !ui.detectThread) runHumanDetect(video, canvas);
-      ui.busy = false;
-      resolve();
-    };
-  });
-  // attach input to video element
-  if (stream) {
-    video.srcObject = stream;
-    return promise;
-  }
-  ui.busy = false;
-  return 'camera stream empty';
+
+  if (!stream) return 'camera stream empty';
+
+  const ready = new Promise((resolve) => { (video.onloadeddata = () => resolve(true)); });
+  video.srcObject = stream;
+  await ready;
+  if (settings.width > settings.height) canvas.style.width = '100vw';
+  else canvas.style.height = '100vh';
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ui.menuWidth.input.setAttribute('value', video.videoWidth);
+  ui.menuHeight.input.setAttribute('value', video.videoHeight);
+  if (live || ui.autoPlay) await videoPlay();
+  // eslint-disable-next-line no-use-before-define
+  if ((live || ui.autoPlay) && !ui.detectThread) runHumanDetect(video, canvas);
+  return 'camera stream ready';
 }
 
 function initPerfMonitor() {
@@ -397,6 +460,7 @@ function webWorker(input, image, canvas, timestamp) {
     worker = new Worker(ui.worker);
     // after receiving message from webworker, parse&draw results and send new frame for processing
     worker.addEventListener('message', (msg) => {
+      status();
       if (msg.data.result.performance && msg.data.result.performance.total) ui.detectFPS.push(1000 / msg.data.result.performance.total);
       if (ui.detectFPS.length > ui.maxFPSframes) ui.detectFPS.shift();
       if (ui.bench) {
@@ -406,24 +470,22 @@ function webWorker(input, image, canvas, timestamp) {
       if (document.getElementById('gl-bench')) document.getElementById('gl-bench').style.display = ui.bench ? 'block' : 'none';
       lastDetectedResult = msg.data.result;
 
-      if (msg.data.image) {
-        lastDetectedResult.canvas = (typeof OffscreenCanvas !== 'undefined') ? new OffscreenCanvas(msg.data.width, msg.data.height) : document.createElement('canvas');
-        lastDetectedResult.canvas.width = msg.data.width;
-        lastDetectedResult.canvas.height = msg.data.height;
+      if (msg.data.image) { // we dont really need canvas since we draw from video
+        /*
+        if (!lastDetectedResult.canvas || lastDetectedResult.canvas.width !== msg.data.width || lastDetectedResult.canvas.height !== msg.data.height) {
+          lastDetectedResult.canvas = (typeof OffscreenCanvas !== 'undefined') ? new OffscreenCanvas(msg.data.width, msg.data.height) : document.createElement('canvas');
+          lastDetectedResult.canvas.width = msg.data.width;
+          lastDetectedResult.canvas.height = msg.data.height;
+        }
         const ctx = lastDetectedResult.canvas.getContext('2d');
         const imageData = new ImageData(new Uint8ClampedArray(msg.data.image), msg.data.width, msg.data.height);
         ctx.putImageData(imageData, 0, 0);
+        */
       }
 
       ui.framesDetect++;
-      if (!ui.drawThread) {
-        status();
-        drawResults(input);
-      }
-      const videoLive = (input.readyState > 2) && (!input.paused);
-      const cameraLive = input.srcObject && (input.srcObject.getVideoTracks()[0].readyState === 'live') && !input.paused;
-      const live = videoLive || cameraLive;
-      if (live) {
+      if (!ui.drawThread) drawResults(input);
+      if (isLive(input)) {
         // eslint-disable-next-line no-use-before-define
         ui.detectThread = requestAnimationFrame((now) => runHumanDetect(input, canvas, now));
       }
@@ -436,28 +498,27 @@ function webWorker(input, image, canvas, timestamp) {
 // main processing function when input is webcam, can use direct invocation or web worker
 function runHumanDetect(input, canvas, timestamp) {
   // if live video
-  const videoLive = (input.readyState > 2) && (!input.paused);
-  const cameraLive = input.srcObject && (input.srcObject.getVideoTracks()[0].readyState === 'live');
-  const live = videoLive || cameraLive;
-  if (!live) {
+  if (!isLive(input)) {
     // stop ui refresh
     // if (ui.drawThread) cancelAnimationFrame(ui.drawThread);
     if (ui.detectThread) cancelAnimationFrame(ui.detectThread);
-    // if we want to continue and camera not ready, retry in 0.5sec, else just give up
     if (input.paused) log('video paused');
-    else if (cameraLive && (input.readyState <= 2)) setTimeout(() => runHumanDetect(input, canvas), 500);
+    // if we want to continue and camera not ready, retry in 0.5sec, else just give up
+    // else if (cameraLive && (input.readyState <= 2)) setTimeout(() => runHumanDetect(input, canvas), 500);
     else log(`video not ready: track state: ${input.srcObject ? input.srcObject.getVideoTracks()[0].readyState : 'unknown'} stream state: ${input.readyState}`);
     log('frame statistics: process:', ui.framesDetect, 'refresh:', ui.framesDraw);
     log('memory', human.tf.engine().memory());
     return;
   }
   if (ui.hintsThread) clearInterval(ui.hintsThread);
-  if (ui.useWorker) {
+  if (ui.useWorker && human.env.offscreen) {
     // get image data from video as we cannot send html objects to webworker
-    const offscreen = (typeof OffscreenCanvas !== 'undefined') ? new OffscreenCanvas(canvas.width, canvas.height) : document.createElement('canvas');
-    offscreen.width = canvas.width;
-    offscreen.height = canvas.height;
-    const ctx = offscreen.getContext('2d');
+    if (!ui.transferCanvas || ui.transferCanvas.width !== canvas.width || ui.transferCanvas.height || canvas.height) {
+      ui.transferCanvas = document.createElement('canvas');
+      ui.transferCanvas.width = canvas.width;
+      ui.transferCanvas.height = canvas.height;
+    }
+    const ctx = ui.transferCanvas.getContext('2d');
     ctx.drawImage(input, 0, 0, canvas.width, canvas.height);
     const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
     // perform detection in worker
@@ -465,6 +526,17 @@ function runHumanDetect(input, canvas, timestamp) {
   } else {
     human.detect(input, userConfig).then((result) => {
       status();
+      /*
+      setTimeout(async () => { // simulate gl context lost 2sec after initial detection
+        const ext = human.gl && human.gl.gl ? human.gl.gl.getExtension('WEBGL_lose_context') : {};
+        if (ext && ext.loseContext) {
+          log('simulate context lost:', human.env.webgl, human.gl, ext);
+          human.gl.gl.getExtension('WEBGL_lose_context').loseContext();
+          await videoPause();
+          status('Exception: WebGL');
+        }
+      }, 2000);
+      */
       if (result.performance && result.performance.total) ui.detectFPS.push(1000 / result.performance.total);
       if (ui.detectFPS.length > ui.maxFPSframes) ui.detectFPS.shift();
       if (ui.bench) {
@@ -540,6 +612,7 @@ async function processImage(input, title) {
       const prev = document.getElementsByClassName('thumbnail');
       if (prev && prev.length > 0) document.getElementById('samples-container').insertBefore(thumb, prev[0]);
       else document.getElementById('samples-container').appendChild(thumb);
+      document.getElementById('samples-container').style.display = 'block';
 
       // finish up
       status();
@@ -566,10 +639,8 @@ async function processVideo(input, title) {
   video.addEventListener('canplay', async () => {
     for (const m of Object.values(menu)) m.hide();
     document.getElementById('samples-container').style.display = 'none';
-    document.getElementById('play').style.display = 'none';
     canvas.style.display = 'block';
-    document.getElementById('btnStartText').innerHTML = 'pause video';
-    await video.play();
+    await videoPlay();
     if (!ui.detectThread) runHumanDetect(video, canvas);
   });
   video.src = input;
@@ -583,17 +654,14 @@ async function detectVideo() {
   canvas.style.display = 'block';
   cancelAnimationFrame(ui.detectThread);
   if ((video.srcObject !== null) && !video.paused) {
-    document.getElementById('btnStartText').innerHTML = 'start video';
-    status('paused');
-    await video.pause();
+    await videoPause();
     // if (ui.drawThread) cancelAnimationFrame(ui.drawThread);
   } else {
     const cameraError = await setupCamera();
     if (!cameraError) {
-      status('INITIATING DETECTION...');
+      status('starting detection');
       for (const m of Object.values(menu)) m.hide();
-      document.getElementById('btnStartText').innerHTML = 'pause video';
-      await video.play();
+      await videoPlay();
       runHumanDetect(video, canvas);
     } else {
       status(cameraError);
@@ -619,6 +687,10 @@ function setupMenu() {
   const top = `${document.getElementById('menubar').clientHeight}px`;
 
   menu.display = new Menu(document.body, '', { top, left: x[0] });
+  menu.display.addBool('results tree', ui, 'results', (val) => {
+    ui.results = val;
+    document.getElementById('results').style.display = ui.results ? 'block' : 'none';
+  });
   menu.display.addBool('perf monitor', ui, 'bench', (val) => ui.bench = val);
   menu.display.addBool('buffer output', ui, 'buffered', (val) => ui.buffered = val);
   menu.display.addBool('crop & scale', ui, 'crop', (val) => {
@@ -630,16 +702,17 @@ function setupMenu() {
     setupCamera();
   });
   menu.display.addHTML('<hr style="border-style: inset; border-color: dimgray">');
-  menu.display.addBool('use depth', human.draw.options, 'useDepth');
-  menu.display.addBool('use curves', human.draw.options, 'useCurves');
-  menu.display.addBool('print labels', human.draw.options, 'drawLabels');
-  menu.display.addBool('draw points', human.draw.options, 'drawPoints');
-  menu.display.addBool('draw boxes', human.draw.options, 'drawBoxes');
-  menu.display.addBool('draw polygons', human.draw.options, 'drawPolygons');
-  menu.display.addBool('fill polygons', human.draw.options, 'fillPolygons');
+  menu.display.addBool('use depth', drawOptions, 'useDepth');
+  menu.display.addBool('use curves', drawOptions, 'useCurves');
+  menu.display.addBool('print labels', drawOptions, 'drawLabels');
+  menu.display.addBool('draw points', drawOptions, 'drawPoints');
+  menu.display.addBool('draw boxes', drawOptions, 'drawBoxes');
+  menu.display.addBool('draw polygons', drawOptions, 'drawPolygons');
+  menu.display.addBool('fill polygons', drawOptions, 'fillPolygons');
 
   menu.image = new Menu(document.body, '', { top, left: x[1] });
   menu.image.addBool('enabled', userConfig.filter, 'enabled', (val) => userConfig.filter.enabled = val);
+  menu.image.addBool('histogram equalization', userConfig.filter, 'equalization', (val) => userConfig.filter.equalization = val);
   ui.menuWidth = menu.image.addRange('image width', userConfig.filter, 'width', 0, 3840, 10, (val) => userConfig.filter.width = parseInt(val));
   ui.menuHeight = menu.image.addRange('image height', userConfig.filter, 'height', 0, 2160, 10, (val) => userConfig.filter.height = parseInt(val));
   menu.image.addHTML('<hr style="border-style: inset; border-color: dimgray">');
@@ -715,6 +788,8 @@ function setupMenu() {
     compare.original = null;
   });
 
+  for (const m of Object.values(menu)) m.hide();
+
   document.getElementById('btnDisplay').addEventListener('click', (evt) => menu.display.toggle(evt));
   document.getElementById('btnImage').addEventListener('click', (evt) => menu.image.toggle(evt));
   document.getElementById('btnProcess').addEventListener('click', (evt) => menu.process.toggle(evt));
@@ -781,14 +856,14 @@ async function processDataURL(f, action) {
           if (document.getElementById('canvas').style.display === 'block') { // replace canvas used for video
             const canvas = document.getElementById('canvas');
             const ctx = canvas.getContext('2d');
-            const overlaid = await human.segmentation(canvas, ui.background, userConfig);
-            if (overlaid) ctx.drawImage(overlaid, 0, 0);
+            const seg = await human.segmentation(canvas, ui.background, userConfig);
+            if (seg.canvas) ctx.drawImage(seg.canvas, 0, 0);
           } else {
             const canvases = document.getElementById('samples-container').children; // replace loaded images
             for (const canvas of canvases) {
               const ctx = canvas.getContext('2d');
-              const overlaid = await human.segmentation(canvas, ui.background, userConfig);
-              if (overlaid) ctx.drawImage(overlaid, 0, 0);
+              const seg = await human.segmentation(canvas, ui.background, userConfig);
+              if (seg.canvas) ctx.drawImage(seg.canvas, 0, 0);
             }
           }
         };
@@ -876,13 +951,18 @@ async function pwaRegister() {
 }
 
 async function main() {
-  window.addEventListener('unhandledrejection', (evt) => {
-    // eslint-disable-next-line no-console
-    console.error(evt.reason || evt);
-    document.getElementById('log').innerHTML = evt.reason.message || evt.reason || evt;
-    status('exception error');
-    evt.preventDefault();
-  });
+  if (ui.exceptionHandler) {
+    window.addEventListener('unhandledrejection', (evt) => {
+      if (ui.detectThread) cancelAnimationFrame(ui.detectThread);
+      if (ui.drawThread) cancelAnimationFrame(ui.drawThread);
+      const msg = evt.reason.message || evt.reason || evt;
+      // eslint-disable-next-line no-console
+      console.error(msg);
+      document.getElementById('log').innerHTML = msg;
+      status(`exception: ${msg}`);
+      evt.preventDefault();
+    });
+  }
 
   log('demo starting ...');
 
@@ -893,7 +973,7 @@ async function main() {
   // sanity check for webworker compatibility
   if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined') {
     ui.useWorker = false;
-    log('workers are disabled due to missing browser functionality');
+    log('webworker functionality is disabled due to missing browser functionality');
   }
 
   // register PWA ServiceWorker
@@ -907,7 +987,7 @@ async function main() {
     log('overriding worker:', ui.useWorker);
   }
   if (params.has('backend')) {
-    userConfig.backend = params.get('backend');
+    userConfig.backend = params.get('backend'); // string
     log('overriding backend:', userConfig.backend);
   }
   if (params.has('preload')) {
@@ -915,24 +995,45 @@ async function main() {
     log('overriding preload:', ui.modelsPreload);
   }
   if (params.has('warmup')) {
-    ui.modelsWarmup = JSON.parse(params.get('warmup'));
+    ui.modelsWarmup = params.get('warmup'); // string
     log('overriding warmup:', ui.modelsWarmup);
+  }
+  if (params.has('bench')) {
+    ui.bench = JSON.parse(params.get('bench'));
+    log('overriding bench:', ui.bench);
+  }
+  if (params.has('play')) {
+    ui.autoPlay = true;
+    log('overriding autoplay:', true);
+  }
+  if (params.has('draw')) {
+    ui.drawWarmup = JSON.parse(params.get('draw'));
+    log('overriding drawWarmup:', ui.drawWarmup);
+  }
+  if (params.has('async')) {
+    userConfig.async = JSON.parse(params.get('async'));
+    log('overriding async:', userConfig.async);
   }
 
   // create instance of human
   human = new Human(userConfig);
-  userConfig = { ...human.config, ...userConfig };
+  // human.env.perfadd = true;
+
+  log('human version:', human.version);
+  // we've merged human defaults with user config and now lets store it back so it can be accessed by methods such as menu
+  userConfig = human.config;
   if (typeof tf !== 'undefined') {
     // eslint-disable-next-line no-undef
     log('TensorFlow external version:', tf.version);
     // eslint-disable-next-line no-undef
     human.tf = tf; // use externally loaded version of tfjs
   }
+  log('tfjs version:', human.tf.version.tfjs);
 
   // setup main menu
   await setupMenu();
   await resize();
-  document.getElementById('log').innerText = `META VISION:  ${human.version}`;
+  document.getElementById('log').innerText = `Human: version ${human.version}`;
 
   // preload models
   if (ui.modelsPreload && !ui.useWorker) {
@@ -940,6 +1041,8 @@ async function main() {
     await human.load(userConfig); // this is not required, just pre-loads all models
     const loaded = Object.keys(human.models).filter((a) => human.models[a]);
     log('demo loaded models:', loaded);
+  } else {
+    await human.init();
   }
 
   // warmup models
@@ -951,10 +1054,10 @@ async function main() {
   }
 
   // ready
-  status('META VISION+');
+  status('human: ready');
   document.getElementById('loader').style.display = 'none';
   document.getElementById('play').style.display = 'block';
-  for (const m of Object.values(menu)) m.hide();
+  document.getElementById('results').style.display = 'none';
 
   // init drag & drop
   await dragAndDrop();
@@ -980,6 +1083,9 @@ async function main() {
     log('overriding images list:', JSON.parse(params.get('images')));
     await detectSampleImages();
   }
+
+  if (human.config.debug) log('environment:', human.env);
+  if (human.config.backend === 'humangl' && human.config.debug) log('backend:', human.gl);
 }
 
 window.onload = main;
